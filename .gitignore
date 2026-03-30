@@ -191,6 +191,25 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# =============================================================================
+# 项目特定忽略规则
+# =============================================================================
+
+# 实验产物（日志、checkpoint、TensorBoard 数据）
+experiments/**/logs/
+experiments/**/checkpoints/
+experiments/**/wandb/
+experiments/**/*.log
+
+# 但保留实验配置和笔记
+!experiments/**/run.sh
+!experiments/**/README.md
+!experiments/**/*.py
+!experiments/**/*.yaml
+
+# Claude Code
+.claude/
+
 # PyPI configuration file
 .pypirc
 
