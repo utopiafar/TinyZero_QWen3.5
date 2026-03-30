@@ -1,9 +1,9 @@
 # =============================================================================
 # TinyZero QWen3.5 GRPO 项目依赖
 # =============================================================================
-# 测试环境: AutoDL (RTX 5090, CUDA 12.8)
-# Python: 3.12.x (miniconda)
-# 参考: TinyZero 项目已验证版本 (2026-03-30)
+# 测试环境: AutoDL (RTX 5090 32GB, CUDA 12.8)
+# Python: 3.12.x (miniconda base 环境)
+# 实际验证日期: 2026-03-30
 #
 # 安装顺序请参考 scripts/setup_env.sh
 # =============================================================================
@@ -15,6 +15,11 @@ torch==2.9.0+cu128
 torchvision==0.24.0+cu128
 torchaudio==2.9.0+cu128
 triton==3.5.0
+
+# === Transformers (Qwen3.5 必需 >= 5.2.0) ===
+# 重要: Qwen3.5 模型架构 (qwen3_5) 需要 transformers >= 5.2.0
+# 这意味着 vLLM (要求 transformers<5) 暂时不可用，使用 HF rollout 替代
+transformers>=5.2.0
 
 # === verl 及核心依赖 ===
 verl==0.7.1
@@ -32,20 +37,25 @@ pylatexenc>=2.10
 ray[default]>=2.41.0
 tensordict>=0.8.0,<=0.10.0,!=0.9.0  # 重要: 排除 0.9.0
 torchdata>=0.11.0
-transformers>=4.57.0
 wandb>=0.25.0
 packaging>=20.0
 tensorboard>=2.20.0
 
-# === 推理引擎 ===
-vllm==0.12.0
-
 # === GPU 加速 ===
-# flash-attn 需要预编译 wheel，不能直接 pip install
-# 使用: pip install flash_attn-2.8.3+cu128torch2.9-cp312-cp312-linux_x86_64.whl
+# flash-attn: 需要预编译 wheel
 # 来源: https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/tag/v0.9.0
-# 或者: https://flashattn.dev/install/prebuilt-wheels
+# 文件: flash_attn-2.8.3+cu128torch2.9-cp312-cp312-linux_x86_64.whl
 flash-attn==2.8.3
 
-# === 内核优化 (可选) ===
+# Qwen3.5 混合架构 (Gated DeltaNet + Gated Attention) 专用加速库
+# 需要从源码编译，安装时加 --no-build-isolation
+flash-linear-attention>=0.4.0
+causal-conv1d>=1.6.0
+
+# === 内核优化 ===
 liger-kernel>=0.7.0
+
+# === 推理引擎 (暂不可用) ===
+# vLLM 要求 transformers<5，与 Qwen3.5 的 transformers>=5.2 不兼容
+# 等上游解决后启用: https://github.com/vllm-project/vllm/issues/30466
+# vllm==0.12.0

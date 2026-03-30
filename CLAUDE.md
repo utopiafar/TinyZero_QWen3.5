@@ -12,6 +12,8 @@ TinyZero_QWen3.5/
 ├── entry.py                 # 训练入口（monkey-patch reward → 启动 verl）
 ├── pyproject.toml           # 包配置
 ├── requirements.txt         # 依赖版本（已验证）
+├── docs/
+│   └── setup_guide.md       # 远程服务器环境安装指南
 ├── src/                     # 核心代码
 │   ├── reward/countdown.py  # 奖励函数 (1.0/0.1/0.0)
 │   ├── templates/countdown.py # 中文 Prompt 模板 (ChatML + few-shot)
@@ -38,6 +40,11 @@ TinyZero_QWen3.5/
 
 stop_token_ids = [248044, 248046]
 
+### Qwen3.5 混合架构
+
+Qwen3.5 使用 Gated DeltaNet (线性注意力, 18层) + Gated Attention (标准注意力, 6层) 混合架构。
+需要安装 `flash-linear-attention` 和 `causal-conv1d` 来加速线性注意力层，否则会回退到慢速 PyTorch 实现。
+
 ### Reward 规则
 
 - `1.0`: 等式正确（数字正确 + 结果正确）
@@ -46,16 +53,22 @@ stop_token_ids = [248044, 248046]
 
 ### 依赖版本（已验证）
 
-安装顺序: PyTorch → vLLM → flash-attn → verl → 其他
+安装顺序: PyTorch → vLLM(可选) → flash-attn → verl → flash-linear-attention → 其他
 
 | 包 | 版本 | 注意事项 |
 |---|------|----------|
 | torch | 2.9.0+cu128 | 先装，用 cu128 index |
+| transformers | >=5.2.0 | **Qwen3.5 必须**, 不兼容 vLLM |
 | verl | 0.7.1 | |
-| vllm | 0.12.0 | 需要 PyTorch 2.9 |
 | flash-attn | 2.8.3 | 必须用预编译 wheel |
+| flash-linear-attention | >=0.4.0 | Qwen3.5 DeltaNet 加速, 需从源码编译 |
+| causal-conv1d | >=1.6.0 | Qwen3.5 DeltaNet 依赖, 需从源码编译 |
 | numpy | >=1.26,<2.0 | 必须 < 2.0 |
-| transformers | >=4.57.0 | |
+| liger-kernel | >=0.7.0 | |
+
+**重要**: vLLM (截至 0.18.0) 要求 `transformers<5`，与 Qwen3.5 的 `transformers>=5.2.0` 不兼容。
+训练使用 HF rollout (`rollout.name=hf`)，这是 verl 的默认且推荐方式。
+详见: https://github.com/vllm-project/vllm/issues/30466
 
 ### AutoDL 服务器路径
 
@@ -70,6 +83,7 @@ stop_token_ids = [248044, 248046]
 
 网络加速: `source /etc/network_turbo`
 HF 镜像: `export HF_ENDPOINT=https://hf-mirror.com`
+PyPI 镜像: `-i https://pypi.tuna.tsinghua.edu.cn/simple/`
 
 ## 实验规范
 
