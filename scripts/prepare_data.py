@@ -1,44 +1,48 @@
 """
 Countdown 任务数据预处理脚本。
 
-使用 apply_chat_template + enable_thinking=True 生成 prompt（参照 CoLA-RL 教程）。
-通过 reward.custom_reward_function.path 注入自定义 reward 函数（verl v0.7.1 方式）。
+手拼 Qwen3 ChatML 模板生成 prompt，无需 transformers>=5.2 的 enable_thinking。
 
 使用方法:
     python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown
 """
 
 import os
+import random
 import argparse
-from datasets import load_dataset
-from transformers import AutoTokenizer
+from datasets import load_dataset, Dataset
 
 DATA_SOURCE = 'countdown'
-DEFAULT_MODEL_PATH = '/root/autodl-fs/models/Qwen3-1.7B-Base'
 
 PROMPT_TEMPLATE = (
+    "<|im_start|>user\n"
     "Using the numbers {numbers}, create an equation that equals {target}. "
     "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
     "Show your reasoning in <think reasoning> </think reasoning> tags, "
     "and return the final answer in <answer> </answer> tags, "
-    "e.g. <answer> (1 + 2) / 3 </answer>."
+    "e.g. <answer> (1 + 2) / 3 </answer>.<|im_end|>\n"
+    "<|im_start|>assistant\n"
 )
 
 
-def make_map_fn(split, tokenizer):
+def generate_countdown_data(n_samples, n_nums=4, seed=42):
+    """生成 Countdown 数据：随机选 3-4 个数字(1-100)，随机选 target(1-100)。"""
+    rng = random.Random(seed)
+    data = []
+    for _ in range(n_samples):
+        count = rng.choice([3, 4]) if n_nums == 4 else n_nums
+        numbers = [rng.randint(1, 100) for _ in range(count)]
+        target = rng.randint(1, 100)
+        data.append({"nums": numbers, "target": target})
+    return data
+
+
+def make_map_fn(split):
     def process_fn(example, idx):
         numbers = example['nums']
         target = example['target']
 
-        user_content = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
-        messages = [{"role": "user", "content": user_content}]
-
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=True,
-        )
+        prompt_text = PROMPT_TEMPLATE.format(numbers=numbers, target=target)
 
         solution = {
             "target": target,
@@ -69,27 +73,26 @@ def main():
     parser.add_argument('--local_dir', default='/root/autodl-tmp/data/countdown')
     parser.add_argument('--train_size', type=int, default=32768)
     parser.add_argument('--test_size', type=int, default=1024)
-    parser.add_argument('--model_path', default=DEFAULT_MODEL_PATH)
     args = parser.parse_args()
 
-    print(f"从 {args.model_path} 加载 tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    print("从 HuggingFace 加载 Countdown 数据集...")
+    try:
+        raw_dataset = load_dataset('Jiayi-Pan/Countdown-Tasks-3to4', split='train')
+        print(f"原始数据集大小: {len(raw_dataset)}")
+        total_needed = args.train_size + args.test_size
+        assert len(raw_dataset) > total_needed
+        train_raw = raw_dataset.select(range(args.train_size))
+        test_raw = raw_dataset.select(range(args.train_size, args.train_size + args.test_size))
+    except Exception as e:
+        print(f"网络不可用 ({e})，使用合成数据...")
+        train_raw = Dataset.from_list(generate_countdown_data(args.train_size, seed=42))
+        test_raw = Dataset.from_list(generate_countdown_data(args.test_size, seed=123))
 
-    print(f"从 HuggingFace 加载 Countdown 数据集...")
-    raw_dataset = load_dataset('Jiayi-Pan/Countdown-Tasks-3to4', split='train')
-    print(f"原始数据集大小: {len(raw_dataset)}")
+    print(f"处理训练集 ({len(train_raw)})...")
+    train_dataset = train_raw.map(function=make_map_fn('train'), with_indices=True)
 
-    total_needed = args.train_size + args.test_size
-    assert len(raw_dataset) > total_needed
-
-    train_dataset = raw_dataset.select(range(args.train_size))
-    test_dataset = raw_dataset.select(range(args.train_size, args.train_size + args.test_size))
-
-    print(f"处理训练集 ({args.train_size})...")
-    train_dataset = train_dataset.map(function=make_map_fn('train', tokenizer), with_indices=True)
-
-    print(f"处理测试集 ({args.test_size})...")
-    test_dataset = test_dataset.map(function=make_map_fn('test', tokenizer), with_indices=True)
+    print(f"处理测试集 ({len(test_raw)})...")
+    test_dataset = test_raw.map(function=make_map_fn('test'), with_indices=True)
 
     local_dir = os.path.expanduser(args.local_dir)
     os.makedirs(local_dir, exist_ok=True)

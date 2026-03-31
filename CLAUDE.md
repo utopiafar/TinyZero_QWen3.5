@@ -4,8 +4,7 @@
 
 GRPO 学习项目，目标是用 Qwen3-1.7B-Base 复现 TinyZero 的 grokking 现象。
 
-最初参照 CoLA-RL 教程（verl v0.4.0 + vLLM rollout），但因服务器环境兼容性问题，
-最终使用 verl v0.7.1 + HF rollout + FSDP2 的方案。
+技术栈：verl v0.7.1 + vLLM 0.18.0 rollout + FSDP2，运行在 AutoDL 单 GPU 服务器上。
 
 详细实验记录见 `experiments/README.md`。
 
@@ -25,7 +24,7 @@ TinyZero_QWen3.5/
 │   └── utils/tokenizer.py   # Qwen3 tokenizer 工具
 ├── scripts/
 │   ├── setup_env.sh         # 环境安装脚本
-│   ├── prepare_data.py      # 数据预处理（apply_chat_template + enable_thinking=True）
+│   ├── prepare_data.py      # 数据预处理（手拼 ChatML 模板，零依赖）
 │   └── train_grpo.sh        # 通用训练脚本（支持 HF/vLLM 切换）
 └── experiments/             # 实验记录
     ├── README.md            # 全部实验总结
@@ -38,15 +37,27 @@ TinyZero_QWen3.5/
 
 | 包 | 版本 | 说明 |
 |---|------|------|
-| python | 3.12 | 服务器默认 |
-| torch | 2.10.0+cu128 | |
+| python | 3.12.3 | 服务器默认 |
+| torch | 2.10.0+cu128 | PyPI 安装 |
 | verl | 0.7.1 | PyPI 安装 |
-| transformers | 5.4.0 | Qwen3 需要 >=5.2 |
-| flash-attn | 2.8.1 | GitHub 预编译 wheel |
+| transformers | 4.57.6 | vLLM 要求 <5 |
+| vllm | 0.18.0 | PyPI 安装 |
+| flash-attn | 2.8.3 | 预编译 wheel，匹配 cu128+torch2.10 |
+| numpy | 1.26.4 | |
 
-> **注意**: 原计划的 `tinyzero` conda 环境 (Python 3.10 + torch 2.6 + verl v0.4.0 + vLLM 0.8.5)
-> 因预编译 wheel 兼容性问题未能完成。如果需要使用 vLLM rollout，
-> 需要等待 vLLM 支持 transformers>=5，或搭建独立的 Python 3.10 环境。
+### 环境安装流程
+
+```bash
+# 1. 基础依赖（使用 base conda 环境）
+pip install torch==2.10.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install verl==0.7.1 vllm==0.18.0 "transformers==4.57.6"
+
+# 2. flash-attn（必须用预编译 wheel，不能从源码编译）
+pip install /autodl-fs/data/flash_attn-2.8.3+cu128torch2.10-cp312-cp312-linux_x86_64.whl
+
+# 3. 数据预处理（手拼 ChatML 模板，无需升级 transformers）
+python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown
+```
 
 ## 关键技术信息
 
@@ -64,9 +75,9 @@ reward.custom_reward_function.name=compute_score
 
 ### 数据格式
 
-使用 `apply_chat_template` + `enable_thinking=True` 生成 prompt：
-```python
-tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
+手拼 Qwen3 ChatML 模板生成 prompt（不依赖 `apply_chat_template`）：
+```
+<|im_start|>user\n...task...<|im_end|>\n<|im_start|>assistant\n
 ```
 
 每个样本结构：
@@ -78,15 +89,16 @@ tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=Tr
 }
 ```
 
-### 训练配置（GRPO + HF Rollout）
+### 训练配置（GRPO + vLLM Rollout）
 
-当前最佳配置（`experiments/2026-03-31_grpo_countdown/run.sh`）：
-- **Rollout**: `hf`（vLLM 与 transformers>=5 不兼容）
+最佳配置（`experiments/2026-03-31_vllm_grpo/run.sh`）：
+- **Rollout**: `vllm` + `mode=async`
 - **训练策略**: `fsdp2`
 - **KL 正则**: `use_kl_loss=True`, `kl_loss_type=low_var_kl`, `kl_loss_coef=0.001`
 - **动态 batch**: `use_dynamic_bsz=True`, `ppo_max_token_len_per_gpu=4096`
 - **采样数**: `rollout.n=8`
 - **学习率**: 1e-6
+- **vLLM 显存**: `gpu_memory_utilization=0.5`（根据 GPU 显存调整）
 - **Reward**: 通过 `reward.custom_reward_function.path` 注入
 
 ### entry.py TensorBoard 补丁
@@ -103,23 +115,17 @@ tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=Tr
 | 临时文件 | `/root/autodl-tmp` | 日志、数据，重启消失 |
 | 模型 | `/root/autodl-fs/models/Qwen3-1.7B-Base` | |
 | 数据 | `/root/autodl-tmp/data/countdown` | |
+| TensorBoard | `/root/autodl-tmp/tf-logs` | |
 
 ## 服务器操作流程
 
 ```bash
-# 1. 环境安装（首次）
-bash scripts/setup_env.sh
-
-# 2. 数据预处理
+# 1. 数据预处理（首次或数据丢失后）
 python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown
 
-# 3. 启动实验
-bash experiments/2026-03-31_grpo_countdown/run.sh
+# 2. 启动实验（vLLM rollout）
+bash experiments/2026-03-31_vllm_grpo/run.sh
+
+# 3. 查看 TensorBoard
+tensorboard --logdir /root/autodl-tmp/tf-logs --port 6006
 ```
-
-## 已知问题
-
-1. **vLLM 与 transformers>=5 不兼容**: 无法使用 vLLM rollout，只能用 HF
-   - 追踪: https://github.com/vllm-project/vllm/issues/30466
-2. **Outputs 日志为空**: Hydra 生成的 `main_ppo.log` 全部为空文件
-3. **verl v0.4.0 方案受阻**: flash-attn/flashinfer 预编译 wheel 与 torch 2.10 不兼容
