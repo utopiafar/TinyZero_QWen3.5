@@ -195,7 +195,11 @@ cython_debug/
 # 项目特定忽略规则
 # =============================================================================
 
-# 实验产物（日志、checkpoint、TensorBoard 数据）
+# 训练产物（日志、checkpoint、TensorBoard 数据）
+outputs/
+tensorboard_log/
+
+# 实验目录中的日志（保留配置和笔记）
 experiments/**/logs/
 experiments/**/checkpoints/
 experiments/**/wandb/

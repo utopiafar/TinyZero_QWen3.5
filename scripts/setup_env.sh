@@ -1,79 +1,113 @@
 #!/bin/bash
 # =============================================================================
-# AutoDL 服务器环境安装脚本
+# TinyZero Qwen3 GRPO 环境安装脚本（参照 CoLA-RL 教程 verl v0.4.0）
 # =============================================================================
-# 用法: bash scripts/setup_env.sh
-#
-# 测试环境: AutoDL RTX 5090 (32GB), CUDA 12.8, Ubuntu 22.04
-# Python: 3.12.x (miniconda base 环境)
-#
-# 重要说明:
-#   - Qwen3.5 需要 transformers >= 5.2.0，与 vLLM (要求 transformers<5) 不兼容
-#   - 训练使用 HF rollout (verl 默认)，不需要 vLLM
-#   - PyPI 请使用清华镜像，阿里云镜像包不全
+# 测试环境: AutoDL RTX 5090 (32GB), CUDA 13.0, Ubuntu 22.04
+# Python: 3.10 (conda env: tinyzero)
 # =============================================================================
 set -euo pipefail
 
 MIRROR="-i https://pypi.tuna.tsinghua.edu.cn/simple/"
 
 echo "============================================"
-echo "TinyZero QWen3.5 环境安装"
+echo "TinyZero Qwen3 环境安装 (verl v0.4.0)"
 echo "============================================"
 
 # AutoDL 学术加速
-echo "[1/8] 启用学术加速..."
+echo "[1/6] 启用学术加速..."
 source /etc/network_turbo 2>/dev/null || echo "  (非 AutoDL 环境，跳过)"
 
-# 确认环境
-echo "[2/8] 环境检查..."
+# 创建 conda 环境
+echo "[2/6] 创建 conda 环境 (Python 3.10)..."
 source /root/miniconda3/etc/profile.d/conda.sh
-conda activate base
+conda config --set solver classic
+if conda env list | grep -q "^tinyzero "; then
+    echo "  环境 tinyzero 已存在"
+else
+    conda create -n tinyzero python=3.10 -y
+fi
+conda activate tinyzero
 echo "  Python: $(python --version)"
-echo "  CUDA: $(nvcc --version | grep release | awk '{print $5}' | sed 's/,//')"
-echo "  GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 
-# 安装 PyTorch (CUDA 12.8)
-echo "[3/8] 安装 PyTorch 2.9.0+cu128..."
-pip install torch==2.9.0 torchvision==0.24.0 torchaudio==2.9.0 \
-    --index-url https://download.pytorch.org/whl/cu128
+# 安装 PyTorch + vllm + tensordict
+echo "[3/6] 安装 torch 2.6.0 + vllm 0.8.5..."
+pip install --no-cache-dir \
+    "vllm==0.8.5.post1" \
+    "torch==2.6.0" \
+    "torchvision==0.21.0" \
+    "torchaudio==2.6.0" \
+    "tensordict==0.6.2" \
+    torchdata \
+    -i https://pypi.mirrors.ustc.edu.cn/simple/
 
-# 安装 Flash Attention (预编译 wheel)
-echo "[4/8] 安装 Flash Attention 2.8.3 (预编译 wheel)..."
+# 安装 Flash Attention（需要从 GitHub 下载预编译 wheel）
+echo "[4/6] 安装 Flash Attention 2.7.4.post1..."
 PY_VER=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-FLASH_WHEEL="flash_attn-2.8.3+cu128torch2.9-${PY_VER}-${PY_VER}-linux_x86_64.whl"
-FLASH_URL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/${FLASH_WHEEL}"
+FLASH_WHEEL="flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-${PY_VER}-${PY_VER}-linux_x86_64.whl"
+GH_URL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/${FLASH_WHEEL}"
 
-echo "  下载: ${FLASH_WHEEL}"
-if ! pip install ${FLASH_URL}; then
-    echo "  预编译 wheel 下载失败，尝试本地安装..."
-    if [ -f "/root/autodl-tmp/${FLASH_WHEEL}" ]; then
-        pip install "/root/autodl-tmp/${FLASH_WHEEL}"
-    else
-        echo "  请手动下载 wheel 并安装:"
-        echo "  https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/tag/v0.9.0"
-        exit 1
+# 尝试多个 GitHub 代理
+DOWNLOADED=false
+for proxy in "https://gh-proxy.com/" "https://ghproxy.cc/" "https://mirror.ghproxy.com/"; do
+    echo "  尝试 ${proxy}..."
+    if wget -q --timeout=120 "${proxy}${GH_URL}" -O "/tmp/${FLASH_WHEEL}"; then
+        if [ -s "/tmp/${FLASH_WHEEL}" ]; then
+            DOWNLOADED=true
+            break
+        fi
     fi
+done
+
+if [ "$DOWNLOADED" = true ]; then
+    pip install --no-cache-dir "/tmp/${FLASH_WHEEL}"
+else
+    echo "  自动下载失败，请手动下载安装:"
+    echo "  ${GH_URL}"
 fi
 
-# 安装 verl 和核心依赖
-echo "[5/8] 安装 verl 0.7.1 及依赖..."
-pip install "numpy>=1.26.0,<2.0.0" $MIRROR
-pip install verl==0.7.1 $MIRROR
-pip install tensorboard liger-kernel peft accelerate $MIRROR
+# 安装 FlashInfer
+echo "[5/6] 安装 FlashInfer 0.2.2.post1..."
+FI_WHEEL="flashinfer_python-0.2.2.post1+cu124torch2.6-cp38-abi3-linux_x86_64.whl"
+FI_URL="https://github.com/flashinfer-ai/flashinfer/releases/download/v0.2.2.post1/${FI_WHEEL}"
 
-# 安装 transformers (Qwen3.5 需要 >= 5.2.0)
-echo "[6/8] 安装 transformers >= 5.2.0 (Qwen3.5 必需)..."
-pip install "transformers>=5.2.0" $MIRROR
+DOWNLOADED=false
+for proxy in "https://gh-proxy.com/" "https://ghproxy.cc/" "https://mirror.ghproxy.com/"; do
+    echo "  尝试 ${proxy}..."
+    if wget -q --timeout=120 "${proxy}${FI_URL}" -O "/tmp/${FI_WHEEL}"; then
+        if [ -s "/tmp/${FI_WHEEL}" ]; then
+            DOWNLOADED=true
+            break
+        fi
+    fi
+done
 
-# 安装 Qwen3.5 DeltaNet 加速库 (需要从源码编译 CUDA 内核)
-echo "[7/8] 安装 flash-linear-attention + causal-conv1d (编译中，约 5-10 分钟)..."
-pip install flash-linear-attention causal-conv1d --no-build-isolation $MIRROR
+if [ "$DOWNLOADED" = true ]; then
+    pip install --no-cache-dir "/tmp/${FI_WHEEL}"
+else
+    echo "  自动下载失败，请手动下载安装:"
+    echo "  ${FI_URL}"
+fi
 
-# 安装项目
-echo "[8/8] 安装项目..."
-pip install -e .
+# 安装 verl v0.4.0
+echo "[6/6] 安装 verl v0.4.0..."
+if [ ! -d "/tmp/verl_v040" ]; then
+    git clone --depth 1 --branch v0.4.0 https://github.com/volcengine/verl.git /tmp/verl_v040
+fi
+cd /tmp/verl_v040
+pip install --no-cache-dir -e . $MIRROR
 
-# 验证
+# 复制 verl/ 和 recipe/ 到项目目录（如果还没有的话）
+PROJECT_DIR=/autodl-fs/data/TinyZero_QWen3.5
+if [ ! -d "${PROJECT_DIR}/verl" ]; then
+    cp -r /tmp/verl_v040/verl ${PROJECT_DIR}/
+    cp -r /tmp/verl_v040/recipe ${PROJECT_DIR}/
+    echo "  已复制 verl/ 和 recipe/ 到项目目录"
+fi
+
+# 回到项目目录
+cd ${PROJECT_DIR}
+
+# 验证安装
 echo ""
 echo "============================================"
 echo "验证安装..."
@@ -81,15 +115,9 @@ python -c "
 import torch; print(f'  torch: {torch.__version__}, CUDA: {torch.version.cuda}')
 import transformers; print(f'  transformers: {transformers.__version__}')
 import verl; print(f'  verl: {verl.__version__}')
-import numpy; print(f'  numpy: {numpy.__version__}')
+import vllm; print(f'  vllm: {vllm.__version__}')
 import flash_attn; print(f'  flash_attn: {flash_attn.__version__}')
-try:
-    import fla; print(f'  flash_linear_attention: OK')
-except: print('  flash_linear_attention: 未安装 (DeltaNet 将使用慢速路径)')
-try:
-    import causal_conv1d; print(f'  causal_conv1d: OK')
-except: pass
-import liger_kernel; print(f'  liger_kernel: OK')
+import flashinfer; print(f'  flashinfer: OK')
 print(f'  GPU: {torch.cuda.get_device_name(0)}')
 print('验证通过!')
 "
@@ -99,8 +127,7 @@ echo "============================================"
 echo "环境安装完成!"
 echo ""
 echo "下一步:"
-echo "  1. python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown"
-echo "  2. bash scripts/train_grpo.sh"
-echo ""
-echo "注意: vLLM 与 transformers>=5 不兼容，训练使用 HF rollout"
+echo "  1. conda activate tinyzero"
+echo "  2. python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown"
+echo "  3. bash experiments/2026-03-31_grpo_countdown/run.sh"
 echo "============================================"

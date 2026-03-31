@@ -1,69 +1,48 @@
 """
-TinyZero QWen3.5 GRPO 训练入口。
+TinyZero QWen3 GRPO 训练入口。
 
-通过 monkey-patching 将自定义 reward 函数注入 verl 框架，
-无需修改 verl 源码。
-
-工作原理:
-    1. 导入 verl 的 main_ppo 模块
-    2. 替换 _select_rm_score_fn，添加 countdown 支持
-    3. 调用 verl 原始的 main() 函数启动训练
-
-用法:
-    python entry.py data.train_files=... data.val_files=... [其他 hydra 参数]
-    # 或
-    bash scripts/train_grpo.sh  # (内部调用 entry.py)
+在调用 verl 主流程前，注入自定义指标（格式成功率、结果成功率等）
+到 TensorBoard 日志系统。
 """
 
-import sys
-from src.reward.countdown import compute_score as countdown_compute_score
+import numpy as np
 
 
-def _patch_reward_function():
-    """将 countdown reward 函数注入 verl 的 reward 分发机制。"""
-    try:
-        import verl.trainer.main_ppo as main_ppo_module
+def _patch_compute_data_metrics():
+    """Monkey-patch verl 的 compute_data_metrics，额外记录 reward 细分指标。
 
-        # 保存原始函数
-        if hasattr(main_ppo_module, '_select_rm_score_fn'):
-            _original_select_fn = main_ppo_module._select_rm_score_fn
-        else:
-            _original_select_fn = None
+    verl 原生的 compute_data_metrics 只记录 score/reward/advantage 的统计量。
+    我们在它的基础上，从 batch.non_tensor_batch 中提取 reward_extra_info
+    （由 NaiveRewardManager 从 compute_score 返回的 dict 中收集），
+    计算格式成功率和结果成功率，注入到 metrics 字典中。
+    """
+    import verl.trainer.ppo.metric_utils as _mu
 
-        def _patched_select_fn(data_source):
-            """扩展版 reward 分发函数，支持 countdown 任务。"""
-            if "countdown" in data_source:
-                return countdown_compute_score
+    _original = _mu.compute_data_metrics
 
-            # 回退到原始分发逻辑
-            if _original_select_fn is not None:
-                return _original_select_fn(data_source)
+    def _patched(batch, use_critic=True):
+        metrics = _original(batch, use_critic=use_critic)
 
-            raise NotImplementedError(
-                f"Unknown data_source: {data_source}. "
-                f"仅支持 'countdown' 任务。"
-            )
+        ntb = getattr(batch, "non_tensor_batch", {})
+        for key in ("format_success", "result_success"):
+            if key in ntb:
+                vals = np.array(ntb[key], dtype=np.float64)
+                if len(vals) > 0:
+                    metrics[f"reward/{key}_rate"] = float(vals.mean())
 
-        # 替换模块级函数
-        main_ppo_module._select_rm_score_fn = _patched_select_fn
-        print("[entry.py] 已注入 countdown reward 函数到 verl")
+        return metrics
 
-    except ImportError as e:
-        print(f"[entry.py] 警告: 无法导入 verl.trainer.main_ppo: {e}")
-        print("[entry.py] 请确保 verl 已安装: pip install verl==0.7.1")
-        sys.exit(1)
+    _mu.compute_data_metrics = _patched
+    print("[entry.py] Patched compute_data_metrics with reward extra info logging")
 
 
 def main():
-    """主入口函数。"""
-    _patch_reward_function()
+    _patch_compute_data_metrics()
 
-    # 导入 verl 的 main 函数 (hydra 入口)
     from verl.trainer.main_ppo import main as verl_main
 
-    print("[entry.py] 启动 verl GRPO 训练...")
     verl_main()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

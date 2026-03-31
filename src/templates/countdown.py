@@ -1,14 +1,14 @@
 """
 Countdown 任务的 Prompt 模板。
 
-专为 Qwen3.5-2B-Base 设计:
+专为 Qwen3-1.7B-Base 设计:
 - 使用 ChatML 格式 (<|im_start|> / <|im_end|>)
 - 中文界面
 - 包含 few-shot 示例
-- 使用 <think reasoning> 标记 (避免触发 Qwen3.5 特殊 token)
+- 使用 <think reasoning> 标记 (避免触发 Qwen3 特殊 token)
 """
 
-# Qwen3.5-2B-Base 的 ChatML 特殊 token
+# Qwen3-1.7B-Base 的 ChatML 特殊 token
 IM_START = "<|im_start|>"
 IM_END = "<|im_end|>"
 
