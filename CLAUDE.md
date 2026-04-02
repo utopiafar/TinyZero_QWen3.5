@@ -15,20 +15,20 @@ TinyZero_QWen3.5/
 ├── CLAUDE.md                # 本文件 — 项目指南
 ├── pyproject.toml           # 包配置
 ├── requirements.txt         # 依赖版本
-├── entry.py                 # 训练入口（注入 TensorBoard 指标补丁）
+├── entry.py                 # 训练入口（直接调用 verl main_ppo）
 ├── docs/
 │   └── setup_guide.md       # 服务器环境安装指南
 ├── src/                     # 核心代码
 │   ├── reward/countdown.py  # Countdown 奖励函数 (1.0/0.1/0.0)
-│   ├── templates/countdown.py  # ChatML 模板
+│   ├── templates/countdown.py  # ChatML 模板（含 few-shot 中文示例）
 │   └── utils/tokenizer.py   # Qwen3 tokenizer 工具
 ├── scripts/
 │   ├── setup_env.sh         # 环境安装脚本
-│   ├── prepare_data.py      # 数据预处理（手拼 ChatML 模板，零依赖）
+│   ├── prepare_data.py      # 数据预处理（手拼 ChatML 中文模板）
 │   └── train_grpo.sh        # 通用训练脚本（支持 HF/vLLM 切换）
-└── experiments/             # 实验记录
+└── experiments/             # 实验记录（按日期命名）
     ├── README.md            # 全部实验总结
-    └── <date>_<name>/       # 各实验配置和笔记
+    └── <date>_<name>/       # 各实验配置（run.sh + notes.md）
 ```
 
 ## 环境要求
@@ -67,17 +67,27 @@ python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown
 - `0.1`: 格式正确（有 `<answer>` 标签）但答案错误
 - `0.0`: 无效格式（无 `<answer>` 标签）
 
-Reward 通过 `reward.custom_reward_function.path` 注入:
+Reward 通过 `reward.custom_reward_function` 注入:
 ```
 reward.custom_reward_function.path=src/reward/countdown.py
 reward.custom_reward_function.name=compute_score
 ```
 
+reward 函数返回 dict: `{"score": float, "format_success": int, "result_success": int}`
+
+### TensorBoard 指标
+
+verl 的 `metric_utils.py` 已集成 reward 细分指标（无需 monkey-patch）：
+- `reward/format_success_rate`: 模型输出包含 `<answer>` 标签的比例
+- `reward/result_success_rate`: 答案完全正确的比例
+- `critic/score/mean`: 平均 reward 分数
+- `response_length/clip_ratio`: 输出被截断的比例
+
 ### 数据格式
 
-手拼 Qwen3 ChatML 模板生成 prompt（不依赖 `apply_chat_template`）：
+手拼 Qwen3 ChatML 中文模板生成 prompt（不依赖 `apply_chat_template`）：
 ```
-<|im_start|>user\n...task...<|im_end|>\n<|im_start|>assistant\n
+<|im_start|>user\n...中文任务描述...<|im_end|>\n<|im_start|>assistant\n
 ```
 
 每个样本结构：
@@ -89,43 +99,103 @@ reward.custom_reward_function.name=compute_score
 }
 ```
 
-### 训练配置（GRPO + vLLM Rollout）
+### 训练配置（最新: v2 实验）
 
-最佳配置（`experiments/2026-03-31_vllm_grpo/run.sh`）：
+最新配置见 `experiments/2026-04-01_vllm_grpo_v2/run.sh`：
 - **Rollout**: `vllm` + `mode=async`
 - **训练策略**: `fsdp2`
 - **KL 正则**: `use_kl_loss=True`, `kl_loss_type=low_var_kl`, `kl_loss_coef=0.001`
 - **动态 batch**: `use_dynamic_bsz=True`, `ppo_max_token_len_per_gpu=4096`
 - **采样数**: `rollout.n=8`
 - **学习率**: 1e-6
-- **vLLM 显存**: `gpu_memory_utilization=0.5`（根据 GPU 显存调整）
+- **vLLM 显存**: `gpu_memory_utilization=0.5`
+- **max_response_length**: 1024（从 v2 开始，原 512 截断率高）
+- **max_num_seqs**: 256（配合更长 response，避免 vLLM sampler warmup OOM）
 - **Reward**: 通过 `reward.custom_reward_function.path` 注入
-
-### entry.py TensorBoard 补丁
-
-`entry.py` monkey-patch 了 verl 的 `compute_data_metrics`，额外记录:
-- `reward/format_success_rate`: 模型输出包含 `<answer>` 标签的比例
-- `reward/result_success_rate`: 答案完全正确的比例
 
 ### AutoDL 服务器路径
 
 | 用途 | 路径 | 说明 |
 |------|------|------|
-| 持久化 | `/root/autodl-fs` | 模型、checkpoint，重启不丢 |
-| 临时文件 | `/root/autodl-tmp` | 日志、数据，重启消失 |
+| 持久化 | `/root/autodl-fs` | 模型、代码，重启不丢 |
+| 临时文件 | `/root/autodl-tmp` | 数据、日志，重启消失 |
 | 模型 | `/root/autodl-fs/models/Qwen3-1.7B-Base` | |
-| 数据 | `/root/autodl-tmp/data/countdown` | |
-| TensorBoard | `/root/autodl-tmp/tf-logs` | |
+| 数据 | `/root/autodl-tmp/data/countdown` | 重启后需重新生成 |
+| TensorBoard | `/root/tf-logs` | 各实验子目录 |
+| Checkpoint | `./checkpoints/` | 项目内，每个 ~20GB |
+
+## 实验组织
+
+### 命名规则
+
+`experiments/<日期>_<描述>/`，每个实验目录包含：
+- `run.sh` — 完整的训练启动脚本（可独立运行）
+- `notes.md` 或 `README.md` — 实验笔记和结果
+
+### 历史实验
+
+| 实验 | 日期 | 说明 |
+|------|------|------|
+| `2026-03-30_*` | 03-30 | 早期探索（baseline, HF rollout 等） |
+| `2026-03-31_vllm_grpo` | 03-31 | v1: vLLM rollout + 英文 prompt + 512 response |
+| `2026-04-01_vllm_grpo_v2` | 04-01 | v2: 中文 prompt + 1024 response + max_num_seqs=256 |
+
+### 新建实验
+
+1. 复制最近的 `run.sh` 到新目录：`cp -r experiments/2026-04-01_vllm_grpo_v2 experiments/<新日期>_<新名>`
+2. 修改 `experiment_name`（决定 TensorBoard 子目录名）
+3. 修改配置参数
+4. 在 `run.sh` 头部注释中记录变更
 
 ## 服务器操作流程
 
+### 启动训练
+
 ```bash
-# 1. 数据预处理（首次或数据丢失后）
+# 1. 数据预处理（首次或服务器重启后，/root/autodl-tmp 会清空）
 python scripts/prepare_data.py --local_dir /root/autodl-tmp/data/countdown
 
-# 2. 启动实验（vLLM rollout）
-bash experiments/2026-03-31_vllm_grpo/run.sh
-
-# 3. 查看 TensorBoard
-tensorboard --logdir /root/autodl-tmp/tf-logs --port 6006
+# 2. 启动实验（后台运行）
+nohup bash experiments/2026-04-01_vllm_grpo_v2/run.sh &
+# 或前台运行（可看实时输出）
+bash experiments/2026-04-01_vllm_grpo_v2/run.sh
 ```
+
+### 监控训练
+
+```bash
+# TensorBoard
+tensorboard --logdir /root/tf-logs --port 6006
+
+# 查看最新 step
+grep "step:" /root/tf-logs/<experiment_name>_console.log | tail -1
+
+# 查看关键指标趋势
+grep "step:" /root/tf-logs/<experiment_name>_console.log | grep -oP "step:\d+.*?reward/format_success_rate:[0-9.]+.*?reward/result_success_rate:[0-9.]+"
+```
+
+### 停止训练
+
+```bash
+# 停止 Ray 集群（会 kill 所有 worker）
+ray stop --force
+
+# 如有残留 vLLM 进程
+pkill -9 -f "vllm"
+```
+
+### 清理空间
+
+```bash
+# 删除 checkpoint（每个 ~20GB）
+rm -rf ./checkpoints/
+
+# 删除 TensorBoard 日志
+rm -rf /root/tf-logs/<experiment_name>/
+```
+
+### 常见问题
+
+- **vLLM OOM (sampler warmup)**: 降低 `max_num_seqs`（默认 1024 太大）或增大 `gpu_memory_utilization`
+- **GPU 残留进程**: `ray stop --force` + `pkill -9 -f "vllm"`，然后 `nvidia-smi` 确认清空
+- **服务器重启后数据丢失**: `/root/autodl-tmp` 是临时目录，需重新 `python scripts/prepare_data.py`
