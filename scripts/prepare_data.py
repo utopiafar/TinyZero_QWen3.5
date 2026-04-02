@@ -16,11 +16,11 @@ DATA_SOURCE = 'countdown'
 
 PROMPT_TEMPLATE = (
     "<|im_start|>user\n"
-    "Using the numbers {numbers}, create an equation that equals {target}. "
-    "You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. "
-    "Show your reasoning in <think reasoning> </think reasoning> tags, "
-    "and return the final answer in <answer> </answer> tags, "
-    "e.g. <answer> (1 + 2) / 3 </answer>.<|im_end|>\n"
+    "使用数字 {numbers}，通过基本算术运算（+、-、*、/）"
+    "构造一个等于 {target} 的等式。每个数字只能使用一次。"
+    "请在 <think reasoning> </think reasoning> 标签中展示你的推理过程，"
+    "并在 <answer> </answer> 标签中返回最终答案，"
+    "例如 <answer> (1 + 2) / 3 </answer>。<|im_end|>\n"
     "<|im_start|>assistant\n"
 )
 
