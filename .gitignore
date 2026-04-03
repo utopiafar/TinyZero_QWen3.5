@@ -198,6 +198,7 @@ cython_debug/
 # 训练产物（日志、checkpoint、TensorBoard 数据）
 outputs/
 tensorboard_log/
+checkpoints/
 
 # 实验目录中的日志（保留配置和笔记）
 experiments/**/logs/

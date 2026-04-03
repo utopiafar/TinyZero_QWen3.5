@@ -1,0 +1,8 @@
+diff --git a/verl/trainer/ppo/metric_utils.py b/verl/trainer/ppo/metric_utils.py
+--- a/verl/trainer/ppo/metric_utils.py
++++ b/verl/trainer/ppo/metric_utils.py
+@@ -170,6 +170,7 @@
+         "critic/advantages/max": torch.max(valid_adv).detach().item(),
+         "critic/advantages/min": torch.min(valid_adv).detach().item(),
++        "critic/advantages/std": torch.std(valid_adv).detach().item(),
+         # returns
